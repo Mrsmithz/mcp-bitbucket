@@ -55,7 +55,9 @@ class StdioRegressionTests(unittest.TestCase):
     def test_workflow_writes_require_exact_payloads_and_no_retries(self):
         reads = [("GET", path, True, None) for path in (
             stdio.PR_PATH, stdio.PR_PATH + "/42", stdio.COMMENTS_PATH,
-            stdio.PR_PATH + "/42/diff")]
+            stdio.PR_PATH + "/42/diff", stdio.FILES_PATH,
+            stdio.ROOT + "/repositories/acme/demo/diffstat/abc..def",
+            stdio.ROOT + "/repositories/acme/demo/diff/abc..def")]
         writes = [
             ("POST", stdio.PR_PATH, True, {
                 "title": "Smoke-created PR", "source": {"branch": {"name": "feature/smoke"}},

@@ -35,12 +35,39 @@ async fn endpoint(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let recorded_path = format!("{path}?{}", uri.query().unwrap_or(""));
     seen.0
         .lock()
         .unwrap()
-        .push((method.to_string(), path.clone(), value.clone(), auth));
+        .push((method.to_string(), recorded_path, value.clone(), auth));
     if method == Method::GET && path.ends_with("/pullrequests") {
         return Json(json!({"values":[]})).into_response();
+    }
+    if method == Method::GET && path.ends_with("/pullrequests/1/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/acme/repo/diffstat/main..feature?topic=release",
+            )
+            .body(axum::body::Body::empty())
+            .unwrap();
+    }
+    if method == Method::GET && path.ends_with("/repositories/acme/repo/diffstat/main..feature") {
+        return Json(json!({"values":[{"old":{"path":"src/old.rs"},"new":{"path":"src/new.rs"},"status":"modified","lines_added":2,"lines_removed":1}]})).into_response();
+    }
+    if method == Method::GET && path.ends_with("/pullrequests/2/diff") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/acme/repo/diff/main..feature?topic=release",
+            )
+            .body(axum::body::Body::empty())
+            .unwrap();
+    }
+    if method == Method::GET && path.ends_with("/repositories/acme/repo/diff/main..feature") {
+        return (StatusCode::OK, "diff --git a/src/file.rs b/src/file.rs\n--- a/src/file.rs\n+++ b/src/file.rs\n@@ -1 +1 @@\n-old\n+new\n").into_response();
     }
     if method == Method::GET && path.ends_with("/comments") {
         return Json(json!({"values":[]})).into_response();
@@ -200,6 +227,8 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
         "list_pull_requests",
         "get_pull_request",
         "get_pull_request_diff",
+        "list_pull_request_files",
+        "get_pull_request_file_diff",
         "list_pull_request_comments",
         "create_pull_request",
         "create_pull_request_comment",
@@ -224,6 +253,14 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
         (
             "get_pull_request_diff",
             json!({"repo_slug":"repo","pull_request_id":1}),
+        ),
+        (
+            "list_pull_request_files",
+            json!({"repo_slug":"repo","pull_request_id":1}),
+        ),
+        (
+            "get_pull_request_file_diff",
+            json!({"repo_slug":"repo","pull_request_id":2,"path":"src/file.rs"}),
         ),
         (
             "list_pull_request_comments",
@@ -288,11 +325,63 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
     }
     {
         let records = seen.0.lock().unwrap();
+        let trace: Vec<_> = records
+            .iter()
+            .map(|(method, path, _, _)| (method.as_str(), path.as_str()))
+            .collect();
         assert_eq!(
-            records.len(),
-            names.len(),
-            "each valid tool must make one request"
+            trace,
+            [
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests?pagelen=50"
+                ),
+                ("GET", "/proxy/2.0/repositories/acme/repo/pullrequests/1?"),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/diff?"
+                ),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/diffstat?"
+                ),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/diffstat/main..feature?topic=release&pagelen=50"
+                ),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/2/diff?"
+                ),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/diff/main..feature?topic=release&path=src%2Ffile.rs"
+                ),
+                (
+                    "GET",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/comments?pagelen=50"
+                ),
+                ("POST", "/proxy/2.0/repositories/acme/repo/pullrequests?"),
+                (
+                    "POST",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/comments?"
+                ),
+                (
+                    "POST",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/approve?"
+                ),
+                (
+                    "DELETE",
+                    "/proxy/2.0/repositories/acme/repo/pullrequests/1/approve?"
+                ),
+                ("GET", "/proxy/2.0/repositories/acme/repo/pullrequests/1?"),
+            ],
+            "HTTP request trace for eleven successful tool calls"
         );
+        assert!(records.iter().all(|(_, _, _, auth)| {
+            auth.as_deref()
+                .is_some_and(|value| value.starts_with("Basic "))
+        }));
         assert!(
             records
                 .iter()
@@ -330,6 +419,8 @@ async fn spawned_stdio_handshake_and_calls_are_id_correlated_and_semantically_ch
         "list_pull_requests",
         "get_pull_request",
         "get_pull_request_diff",
+        "list_pull_request_files",
+        "get_pull_request_file_diff",
         "list_pull_request_comments",
         "create_pull_request",
         "create_pull_request_comment",

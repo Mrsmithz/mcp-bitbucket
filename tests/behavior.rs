@@ -35,6 +35,134 @@ async fn respond(
         json_body.clone(),
         auth,
     ));
+    if path.ends_with("/pullrequests/32/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diffstat/feature..main?topic=true&badnext=1",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/pullrequests/33/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diffstat/feature..main?topic=true&conflict=1",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/pullrequests/30/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diffstat/feature..main?topic=true",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/repositories/fork-owner/forked/diffstat/feature..main") {
+        let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap();
+        if uri.query().unwrap_or("").contains("badnext=1") {
+            return Json(json!({"values":[],"next":17})).into_response();
+        }
+        if uri.query().unwrap_or("").contains("conflict=1") {
+            return Json(json!({"values":[],"next":format!("http://{host}/proxy/2.0/repositories/fork-owner/forked/diffstat/feature..main?topic=false&page=2")})).into_response();
+        }
+        return Json(json!({"values":[
+            {"old":{"path":"src/old [x]+#&.rs"},"new":{"path":"src/new [x]+#&.rs"},"status":"renamed","lines_added":2,"lines_removed":1},
+            {"old":{"path":"src/deleted.rs"},"status":"removed"},
+            {"new":{"path":"src/binary.bin"},"status":"added"}
+        ],"next":format!("http://{host}/proxy/2.0/repositories/fork-owner/forked/diffstat/feature..main?page=2")})).into_response();
+    }
+    if path.ends_with("/pullrequests/35/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/acme/demo/diffstat/acme/demo:111111111111%0D222222222222?from_pullrequest_id=35&topic=true",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/repositories/acme/demo/diffstat/acme/demo:111111111111%0D222222222222") {
+        if uri.query().unwrap_or("").contains("from_pullrequest_id=36") {
+            let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap();
+            return Json(json!({"values":[],"next":format!("http://{host}/proxy/2.0/repositories/acme/demo/diffstat/acme/demo:OTHER?from_pullrequest_id=36&topic=true&page=2")})).into_response();
+        }
+        if uri.query().unwrap_or("").contains("page=2") {
+            return Json(json!({"values":[]})).into_response();
+        }
+        let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap();
+        return Json(json!({"values":[],"next":format!("http://{host}/proxy/2.0/repositories/acme/demo/diffstat/acme/demo:111111111111%0D222222222222?from_pullrequest_id=35&topic=true&page=2")})).into_response();
+    }
+    if path.ends_with("/pullrequests/36/diffstat") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/acme/demo/diffstat/acme/demo:111111111111%0D222222222222?from_pullrequest_id=36&topic=true",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/pullrequests/34/diff") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diff/feature..base?topic=true",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/repositories/fork-owner/forked/diff/feature..base") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diff/feature..final",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/pullrequests/200/diffstat") {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/pullrequests/31/diff") {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(
+                "location",
+                "/proxy/2.0/repositories/fork-owner/forked/diff/feature..main?topic=true",
+            )
+            .body(Body::empty())
+            .unwrap();
+    }
+    if path.ends_with("/repositories/fork-owner/forked/diff/feature..main")
+        || path.ends_with("/repositories/fork-owner/forked/diff/feature..base")
+        || path.ends_with("/repositories/fork-owner/forked/diff/feature..final")
+    {
+        let selected = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).any(
+            |(key, value)| {
+                key == "path"
+                    && (value == "src/日本語/[id]+name?#&.rs"
+                        || value == "src/a\"b.rs"
+                        || value == "src/second-hop.rs")
+            },
+        );
+        if !selected {
+            return (StatusCode::BAD_REQUEST, "missing selected file filter").into_response();
+        }
+        return (StatusCode::OK, "GIT binary patch\\nselected raw patch").into_response();
+    }
     if path.ends_with("/pullrequests/1/diff") {
         return Response::builder()
             .status(StatusCode::FOUND)
@@ -173,6 +301,200 @@ fn target(id: u64) -> PullRequestTarget {
         pull_request_id: id,
     }
 }
+#[tokio::test]
+async fn file_tools_follow_authoritative_fork_redirects_and_filter_before_repository_get() {
+    let (api, seen) = client().await;
+    let page = api
+        .list_pull_request_files(ListPullRequestFilesInput {
+            repo_slug: "r".into(),
+            pull_request_id: 30,
+            page: None,
+            pagelen: Some(20),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.values.len(), 3);
+    assert_eq!(
+        page.values[0].old_path.as_deref(),
+        Some("src/old [x]+#&.rs")
+    );
+    assert_eq!(
+        page.values[0].new_path.as_deref(),
+        Some("src/new [x]+#&.rs")
+    );
+    assert_eq!(page.values[0].lines_added, Some(2));
+    assert_eq!(page.values[1].lines_added, None);
+    assert_eq!(page.next_page.as_deref(), Some("2"));
+    assert!(!page.truncated);
+
+    let path = "src/日本語/[id]+name?#&.rs";
+    let diff = api
+        .get_pull_request_file_diff(GetPullRequestFileDiffInput {
+            repo_slug: "r".into(),
+            pull_request_id: 31,
+            path: path.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(diff.path, path);
+    assert_eq!(diff.diff, "GIT binary patch\\nselected raw patch");
+    let quote = "src/a\"b.rs";
+    let quoted = api
+        .get_pull_request_file_diff(GetPullRequestFileDiffInput {
+            repo_slug: "r".into(),
+            pull_request_id: 31,
+            path: quote.into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(quoted.path, quote);
+    assert_eq!(quoted.diff, "GIT binary patch\\nselected raw patch");
+
+    let redirected = api
+        .get_pull_request_file_diff(GetPullRequestFileDiffInput {
+            repo_slug: "r".into(),
+            pull_request_id: 34,
+            path: "src/second-hop.rs".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(redirected.path, "src/second-hop.rs");
+
+    assert!(matches!(
+        api.list_pull_request_files(ListPullRequestFilesInput {
+            repo_slug: "r".into(),
+            pull_request_id: 200,
+            page: None,
+            pagelen: None,
+        })
+        .await,
+        Err(ToolError::UnsafeNavigation)
+    ));
+    assert!(matches!(
+        api.create_pull_request_comment(CreateCommentInput {
+            repo_slug: "r".into(),
+            pull_request_id: 4,
+            comment: CommentInput::Inline {
+                body: "review".into(),
+                path: quote.into(),
+                side: DiffSide::New,
+                line: 1,
+            },
+        })
+        .await,
+        Err(ToolError::Invalid(_))
+    ));
+
+    let records = seen.0.lock().unwrap();
+    let repository_reads: Vec<_> = records
+        .iter()
+        .filter(|r| r.1.contains("/repositories/fork-owner/forked/"))
+        .collect();
+    assert_eq!(repository_reads.len(), 5);
+    assert!(
+        repository_reads
+            .iter()
+            .all(|r| r.0 == "GET" && r.3.as_deref().unwrap().starts_with("Basic "))
+    );
+    assert!(repository_reads[0].1.contains("topic=true"));
+    assert!(repository_reads[0].1.contains("pagelen=20"));
+    assert!(repository_reads[1].1.contains("topic=true"));
+    assert!(
+        repository_reads[1]
+            .1
+            .contains("path=src%2F%E6%97%A5%E6%9C%AC%E8%AA%9E%2F%5Bid%5D%2Bname%3F%23%26.rs")
+    );
+    assert!(!repository_reads[1].1.contains("path=unfiltered"));
+    assert!(repository_reads.iter().any(|r| {
+        r.1.starts_with("/proxy/2.0/repositories/fork-owner/forked/diff/feature..final?")
+            && r.1.contains("topic=true")
+            && r.1.contains("path=src%2Fsecond-hop.rs")
+    }));
+    assert!(
+        repository_reads
+            .iter()
+            .all(|r| { !r.1.contains("path=") || r.1.contains("path=src%2F") })
+    );
+    assert!(
+        repository_reads
+            .iter()
+            .any(|r| r.1.contains("path=src%2Fa%22b.rs"))
+    );
+}
+
+#[tokio::test]
+async fn cloud_comparison_suffix_is_opaque_across_http_and_pagination() {
+    let (api, seen) = client().await;
+    let page = api
+        .list_pull_request_files(ListPullRequestFilesInput {
+            repo_slug: "r".into(),
+            pull_request_id: 35,
+            page: None,
+            pagelen: Some(12),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.next_page.as_deref(), Some("2"));
+    let second = api
+        .list_pull_request_files(ListPullRequestFilesInput {
+            repo_slug: "r".into(),
+            pull_request_id: 35,
+            page: page.next_page,
+            pagelen: Some(12),
+        })
+        .await
+        .unwrap();
+    assert!(second.values.is_empty());
+    assert!(matches!(
+        api.list_pull_request_files(ListPullRequestFilesInput {
+            repo_slug: "r".into(),
+            pull_request_id: 36,
+            page: None,
+            pagelen: Some(12),
+        })
+        .await,
+        Err(ToolError::Malformed)
+    ));
+    let requests = seen.0.lock().unwrap();
+    let comparison: Vec<_> = requests
+        .iter()
+        .filter(|r| r.1.contains("/repositories/acme/demo/diffstat/"))
+        .collect();
+    assert_eq!(comparison.len(), 3);
+    assert!(
+        comparison
+            .iter()
+            .all(|r| r.0 == "GET" && r.3.as_deref().unwrap().starts_with("Basic "))
+    );
+    assert!(
+        comparison[0].1.contains("from_pullrequest_id=35")
+            && comparison[0].1.contains("topic=true")
+            && comparison[0].1.contains("pagelen=12")
+    );
+    assert!(
+        comparison[1].1.contains("from_pullrequest_id=35")
+            && comparison[1].1.contains("topic=true")
+            && comparison[1].1.contains("page=2")
+    );
+}
+
+#[tokio::test]
+async fn file_page_rejects_malformed_and_conflicting_next_links() {
+    let (api, _) = client().await;
+    for pull_request_id in [32, 33] {
+        assert!(matches!(
+            api.list_pull_request_files(ListPullRequestFilesInput {
+                repo_slug: "r".into(),
+                pull_request_id,
+                page: None,
+                pagelen: None,
+            })
+            .await,
+            Err(ToolError::Malformed)
+        ));
+    }
+}
+
 #[tokio::test]
 async fn safe_diff_redirect_stays_in_configured_prefix_and_auth_never_leaks() {
     let (api, seen) = client().await;
