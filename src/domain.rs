@@ -102,6 +102,35 @@ pub struct CreateCommentInput {
 }
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ListPullRequestFilesInput {
+    pub repo_slug: String,
+    pub pull_request_id: u64,
+    pub page: Option<String>,
+    pub pagelen: Option<u8>,
+}
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetPullRequestFileDiffInput {
+    pub repo_slug: String,
+    pub pull_request_id: u64,
+    pub path: String,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct PullRequestFile {
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
+    pub status: Option<String>,
+    pub lines_added: Option<u64>,
+    pub lines_removed: Option<u64>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct PullRequestFileDiff {
+    pub path: String,
+    pub diff: String,
+    pub truncated: bool,
+}
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListCommentsInput {
     pub repo_slug: String,
     pub pull_request_id: u64,
@@ -187,13 +216,22 @@ pub fn validate_repo_path(s: &str) -> Result<(), ToolError> {
     if s.is_empty()
         || s.len() > 512
         || s.starts_with('/')
-        || s.contains(['\\', '"'])
+        || s.contains('\\')
         || s.bytes().any(|b| b.is_ascii_control())
         || s.split('/')
             .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err(ToolError::Invalid(
             "path must contain safe repository path segments".into(),
+        ));
+    }
+    Ok(())
+}
+pub fn validate_inline_path(s: &str) -> Result<(), ToolError> {
+    validate_repo_path(s)?;
+    if s.contains('"') {
+        return Err(ToolError::Invalid(
+            "inline path must not contain a quote".into(),
         ));
     }
     Ok(())

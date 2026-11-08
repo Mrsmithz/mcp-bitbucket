@@ -22,12 +22,15 @@ ENCODED_AUTH = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
 AUTH = "Basic " + ENCODED_AUTH
 TOOLS = {
     "list_pull_requests", "get_pull_request", "get_pull_request_diff",
+    "list_pull_request_files", "get_pull_request_file_diff",
     "list_pull_request_comments", "create_pull_request",
     "create_pull_request_comment", "approve_pull_request",
     "withdraw_pull_request_approval", "get_pull_request_approvals",
 }
 TARGET = {"repo_slug": "demo", "pull_request_id": 42}
 PR_PATH = ROOT + "/repositories/acme/demo/pullrequests"
+FILES_PATH = PR_PATH + "/42/diffstat"
+FILE_DIFF_PATH = ROOT + "/repositories/acme/demo/diff/abc..def"
 COMMENTS_PATH = PR_PATH + "/42/comments"
 APPROVE_42_PATH = PR_PATH + "/42/approve"
 APPROVE_PATH = PR_PATH + "/45/approve"
@@ -98,14 +101,30 @@ class Fixture(BaseHTTPRequestHandler):
             self._send_json(200, {"values": [PR], "pagelen": 1})
         elif path == pr_root + "42":
             self._send_json(200, PR)
-        elif path == COMMENTS_PATH:
-            self._send_json(200, {"values": [{"id": 7, "content": {"raw": "Existing comment"}}]})
-        elif path == pr_root + "42/diff":
+        elif path == FILES_PATH:
             self.send_response(302)
-            self.send_header("Location", ROOT + "/repositories/acme/demo/diff/abc..def")
+            self.send_header("Location", ROOT + "/repositories/acme/demo/diffstat/abc..def?topic=true")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path == ROOT + "/repositories/acme/demo/diff/abc..def":
+        elif path == ROOT + "/repositories/acme/demo/diffstat/abc..def":
+            self._send_json(200, {"values": [{"old": {"path": "src/old.rs"},
+                "new": {"path": "src/lib.rs"}, "status": "renamed",
+                "lines_added": 1, "lines_removed": 1}]})
+        elif path == pr_root + "42/diff":
+            self.send_response(302)
+            self.send_header("Location", ROOT + "/repositories/acme/demo/diff/abc..def?topic=true")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif path == FILE_DIFF_PATH and "path=src%2Flib.rs" in self.path:
+            body = b"GIT binary patch\nselected file only"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == COMMENTS_PATH:
+            self._send_json(200, {"values": [{"id": 7, "content": {"raw": "Existing comment"}}]})
+        elif path == ROOT + "/repositories/acme/demo/diff/abc..def" and "path=" not in self.path:
             body = DIFF.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -364,7 +383,10 @@ def verify_workflow_requests(requests):
     assert all(valid_auth for _, _, valid_auth, _ in writes), "workflow write omitted Basic authentication"
     reads = [(method, path.split("?", 1)[0]) for method, path, _, _ in requests if method == "GET"]
     expected_reads = {("GET", PR_PATH), ("GET", PR_PATH + "/42"),
-                      ("GET", COMMENTS_PATH), ("GET", PR_PATH + "/42/diff")}
+                      ("GET", COMMENTS_PATH), ("GET", PR_PATH + "/42/diff"),
+                      ("GET", FILES_PATH),
+                      ("GET", ROOT + "/repositories/acme/demo/diffstat/abc..def"),
+                      ("GET", ROOT + "/repositories/acme/demo/diff/abc..def")}
     assert expected_reads.issubset(set(reads)), "one or more read tools did not reach the local fixture"
 
 
@@ -409,6 +431,13 @@ def main():
         verify_approval_report(approvals)
         call_tool("list_pull_requests", {"repo_slug": "demo"})
         call_tool("get_pull_request", TARGET)
+        files = structured_data(call_tool("list_pull_request_files", {**TARGET, "pagelen": 25}))
+        assert files["values"][0]["old_path"] == "src/old.rs"
+        assert files["values"][0]["new_path"] == "src/lib.rs"
+        file_diff = structured_data(call_tool("get_pull_request_file_diff", {**TARGET, "path": "src/lib.rs"}))
+        assert file_diff["diff"] == "GIT binary patch\nselected file only"
+        filtered = [entry for entry in Fixture.requests if entry[0] == "GET" and "/repositories/acme/demo/diff/abc..def?" in entry[1]]
+        assert len(filtered) == 1 and "path=src%2Flib.rs" in filtered[0][1], "file diff was not server-filtered exactly once"
         call_tool("list_pull_request_comments", {"repo_slug": "demo",
                                                    "pull_request_id": 42})
         call_tool("create_pull_request", {
@@ -466,7 +495,7 @@ def main():
                 errors.append(error)
     if errors:
         raise errors[0]
-    print("PASS: all nine tools, PR/comment writes, approval identities, API auth/prefix, safe redirects, no retry")
+    print("PASS: all eleven tools, per-file filtering, PR/comment writes, approval identities, API auth/prefix, safe redirects, no retry")
 
 
 if __name__ == "__main__":

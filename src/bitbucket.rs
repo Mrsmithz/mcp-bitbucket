@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use std::{env, net::IpAddr, time::Duration};
 use url::Url;
 
+mod file_review;
+
 const MAX_BODY: usize = 1_000_000;
 const MAX_DIFF: usize = 500_000;
 const MAX_REDIRECTS: usize = 3;
@@ -138,6 +140,29 @@ impl Bitbucket {
         let path_ok = prefix_ok && !to.path().split('/').any(|p| p == ".." || p == ".");
         origin_ok && no_sensitive_query && path_ok
     }
+    async fn send_once(
+        &self,
+        method: &Method,
+        url: &Url,
+        body: Option<&Value>,
+        kind: RequestKind,
+    ) -> Result<Response, ToolError> {
+        let mut req = self
+            .http
+            .request(method.clone(), url.clone())
+            .header(header::AUTHORIZATION, &self.config.auth)
+            .header(header::ACCEPT, "application/json");
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        req.send().await.map_err(|_| {
+            if kind == RequestKind::Read {
+                ToolError::Transport
+            } else {
+                ToolError::OutcomeUnknown
+            }
+        })
+    }
     async fn send(
         &self,
         method: Method,
@@ -150,21 +175,7 @@ impl Bitbucket {
         } else {
             0
         } {
-            let mut req = self
-                .http
-                .request(method.clone(), url.clone())
-                .header(header::AUTHORIZATION, &self.config.auth)
-                .header(header::ACCEPT, "application/json");
-            if let Some(b) = &body {
-                req = req.json(b);
-            }
-            let response = req.send().await.map_err(|_| {
-                if kind == RequestKind::Read {
-                    ToolError::Transport
-                } else {
-                    ToolError::OutcomeUnknown
-                }
-            })?;
+            let response = self.send_once(&method, &url, body.as_ref(), kind).await?;
             if !response.status().is_redirection() {
                 return Ok(response);
             }
@@ -439,7 +450,7 @@ impl Bitbucket {
                 line,
             } => {
                 validate_text("body", &body, 100_000)?;
-                validate_repo_path(&path)?;
+                validate_inline_path(&path)?;
                 let diff = self
                     .get_pull_request_diff(PullRequestTarget {
                         repo_slug: i.repo_slug.clone(),

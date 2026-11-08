@@ -60,7 +60,25 @@ impl BitbucketServer {
         output(&self.api, self.api.get_pull_request_diff(input).await)
     }
     #[tool(
-        description = "List pull request comments. Returns bounded values and an actionable next_page   token."
+        description = "List files changed by a pull request. Returns bounded file metadata and an actionable next_page token."
+    )]
+    async fn list_pull_request_files(
+        &self,
+        Parameters(input): Parameters<ListPullRequestFilesInput>,
+    ) -> CallToolResult {
+        output(&self.api, self.api.list_pull_request_files(input).await)
+    }
+    #[tool(
+        description = "Read the bounded diff for one pull request file. The result reports truncation and does not imply inline-comment placement support."
+    )]
+    async fn get_pull_request_file_diff(
+        &self,
+        Parameters(input): Parameters<GetPullRequestFileDiffInput>,
+    ) -> CallToolResult {
+        output(&self.api, self.api.get_pull_request_file_diff(input).await)
+    }
+    #[tool(
+        description = "List pull request comments. Returns bounded values and an actionable next_page token."
     )]
     async fn list_pull_request_comments(
         &self,
