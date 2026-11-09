@@ -21,7 +21,7 @@ TOKEN = "smoke-only-not-a-real-atlassian-token"
 ENCODED_AUTH = base64.b64encode(f"{EMAIL}:{TOKEN}".encode()).decode()
 AUTH = "Basic " + ENCODED_AUTH
 TOOLS = {
-    "list_pull_requests", "get_pull_request", "get_pull_request_diff",
+    "search_repositories", "list_pull_requests", "get_pull_request", "get_pull_request_diff",
     "list_pull_request_files", "get_pull_request_file_diff",
     "list_pull_request_comments", "create_pull_request",
     "create_pull_request_comment", "approve_pull_request",
@@ -97,7 +97,13 @@ class Fixture(BaseHTTPRequestHandler):
         self._record("GET")
         path = self.path.split("?", 1)[0]
         pr_root = PR_PATH + "/"
-        if path == PR_PATH:
+        if path == ROOT + "/repositories/acme":
+            self._send_json(200, {"values": [{
+                "uuid": "{local-repo}", "name": "Demo Repository", "full_name": "acme/demo",
+                "is_private": True,
+                "links": {"html": {"href": "https://bitbucket.org/acme/demo"}},
+            }]})
+        elif path == PR_PATH:
             self._send_json(200, {"values": [PR], "pagelen": 1})
         elif path == pr_root + "42":
             self._send_json(200, PR)
@@ -190,13 +196,24 @@ class StdioClient:
     LINE_LIMIT = 64_000
     RESPONSE_QUEUE_LIMIT = 32
 
-    def __init__(self, executable, base_url):
+    def __init__(self, executable, base_url, *, env_overrides=None):
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SHELL")
                if key in os.environ}
         env.update(BITBUCKET_EMAIL=EMAIL, BITBUCKET_API_TOKEN=TOKEN,
                    BITBUCKET_WORKSPACE="acme", BITBUCKET_BASE_URL=base_url,
+                   BITBUCKET_TLS_VERIFY="true",
                    NO_PROXY="127.0.0.1,localhost",
                    no_proxy="127.0.0.1,localhost")
+        for key, value in (env_overrides or {}).items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+        self.secrets = tuple(value for key in ("BITBUCKET_EMAIL", "BITBUCKET_API_TOKEN")
+                             if (value := env.get(key)))
+        if len(self.secrets) == 2:
+            self.secrets += (base64.b64encode(":".join(self.secrets).encode()).decode(),
+                             "Basic " + base64.b64encode(":".join(self.secrets).encode()).decode())
         self.process = subprocess.Popen([str(executable)], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         env=env, start_new_session=True)
@@ -238,9 +255,10 @@ class StdioClient:
         self.process.stdin.write((json.dumps(message) + "\n").encode())
         self.process.stdin.flush()
 
-    def request(self, method, params):
-        self.sequence += 1
-        request_id = self.sequence
+    def request(self, method, params, *, request_id=None):
+        if request_id is None:
+            self.sequence += 1
+            request_id = self.sequence
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         deadline = time.monotonic() + 15
         while True:
@@ -263,8 +281,9 @@ class StdioClient:
                 assert "error" not in message, "MCP protocol error"
                 return message["result"]
 
-    def call(self, name, target):
-        return self.request("tools/call", {"name": name, "arguments": target})
+    def call(self, name, target, *, request_id=None):
+        return self.request("tools/call", {"name": name, "arguments": target},
+                            request_id=request_id)
 
     def _captured(self):
         with self._lock:
@@ -273,41 +292,64 @@ class StdioClient:
 
     def _check_secrets(self):
         assert not self._overflow.is_set(), "MCP output exceeded bounded capture"
-        assert_no_credentials(self._captured())
+        assert_no_credentials(self._captured(), self.secrets)
 
     def close(self):
+        errors = []
         try:
             if self.process.stdin and not self.process.stdin.closed:
                 self.process.stdin.close()
+        except (BrokenPipeError, OSError) as error:
+            errors.append(error)
+        for timeout in (5, 2):
             try:
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=timeout)
+                break
             except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+                if timeout == 5:
+                    try:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+        else:
+            pass
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
             self.process.wait(timeout=2)
-            for reader in self._readers:
-                reader.join(timeout=2)
-            self._check_secrets()
-        finally:
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.1)
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired as error:
+            errors.append(error)
+        for reader in self._readers:
+            reader.join(timeout=2)
+        alive = [reader for reader in self._readers if reader.is_alive()]
+        if not alive:
             for stream in (self.process.stdout, self.process.stderr):
                 if stream and not stream.closed:
                     stream.close()
+        try:
+            self._check_secrets()
+        except BaseException as error:
+            errors.append(error)
+        if alive:
+            errors.append(AssertionError("stdio reader did not stop; left its stream open"))
+        if errors:
+            raise errors[0]
 
 
-def assert_no_credentials(outputs):
+def assert_no_credentials(outputs, secrets=(TOKEN, AUTH, ENCODED_AUTH)):
     for channel, output in outputs.items():
-        if any(secret in output for secret in (TOKEN, AUTH, ENCODED_AUTH)):
+        if any(secret in output for secret in secrets):
             raise AssertionError(f"credential leaked to {channel}")
 
 
@@ -427,6 +469,16 @@ def main():
             completed_tools.add(name)
             return result
 
+        repositories = structured_data(call_tool("search_repositories", {"query": "deMO"}))
+        assert repositories["values"] == [{
+            "uuid": "{local-repo}", "name": "Demo Repository", "slug": "demo",
+            "workspace": "acme", "url": "https://bitbucket.org/acme/demo",
+            "is_private": True,
+        }]
+        search_requests = [entry for entry in Fixture.requests
+                           if entry[0] == "GET" and entry[1].startswith(ROOT + "/repositories/acme?")]
+        assert len(search_requests) == 1 and search_requests[0][1] == (
+            ROOT + "/repositories/acme?pagelen=50"), "search sent query modifiers or multiple pages"
         approvals = structured_data(call_tool("get_pull_request_approvals", TARGET))
         verify_approval_report(approvals)
         call_tool("list_pull_requests", {"repo_slug": "demo"})
@@ -495,7 +547,7 @@ def main():
                 errors.append(error)
     if errors:
         raise errors[0]
-    print("PASS: all eleven tools, per-file filtering, PR/comment writes, approval identities, API auth/prefix, safe redirects, no retry")
+    print("PASS: all twelve tools, repository search, per-file filtering, PR/comment writes, approval identities, API auth/prefix, safe redirects, no retry")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ JSON_REPLY_EXPANSION = 13
 PROTOCOL_MARGIN = 500_000
 LINE = b'\x00' * 20 + b'\n'
 TOOLS = {
-    'list_pull_requests', 'get_pull_request', 'get_pull_request_diff',
+    'search_repositories', 'list_pull_requests', 'get_pull_request', 'get_pull_request_diff',
     'list_pull_request_comments', 'create_pull_request', 'create_pull_request_comment',
     'approve_pull_request', 'withdraw_pull_request_approval', 'get_pull_request_approvals',
     'list_pull_request_files', 'get_pull_request_file_diff',
@@ -351,7 +351,7 @@ def main():
             for server in reversed(servers):
                 server.shutdown()
                 server.server_close()
-    print('PASS independent file review:11tools, exact authenticated sequences, diffstat metadata/paging, encoded server filter, fork context, navigation/input failures, header-only rejection, retained streaming prefix')
+    print('PASS independent file review:12-tool schema, exact authenticated sequences, diffstat metadata/paging, encoded server filter, fork context, navigation/input failures, header-only rejection, retained streaming prefix')
 
 
 if __name__ == '__main__':

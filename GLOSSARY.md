@@ -1,8 +1,28 @@
-# Bitbucket pull request workflow
+# Bitbucket repository and pull request workflow
 
-This context covers pull requests and review decisions in Bitbucket Cloud.
+This context covers repository discovery, pull requests, and review decisions in Bitbucket Cloud.
 
 ## Language
+
+**Workspace**:
+A Bitbucket grouping of repositories and their access permissions.
+_Avoid_: Repository, Atlassian organization
+
+**Repository**:
+A Git repository hosted in a Bitbucket workspace.
+_Avoid_: Project when referring to a repository
+
+**Repository name**:
+The human-readable display name of a repository, distinct from its repository slug.
+_Avoid_: Repository slug
+
+**Repository slug**:
+The workspace-local repository identifier used in Bitbucket repository URLs.
+_Avoid_: Repository name
+
+**Accessible repository**:
+A repository whose metadata the authenticated user's current credentials permit them to read.
+_Avoid_: Public repository as a synonym
 
 **Pull request**:
 A proposal to merge changes from a source branch into a destination branch for review.

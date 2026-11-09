@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use mcp_bitbucket::bitbucket::{Bitbucket, Config};
+use mcp_bitbucket::bitbucket::{Bitbucket, Config, TlsVerification};
 use mcp_bitbucket::domain::*;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -291,6 +291,7 @@ async fn client() -> (Bitbucket, Seen) {
         "token-secret",
         "w",
         &format!("http://{addr}/proxy/2.0"),
+        TlsVerification::Verify,
     )
     .unwrap();
     (Bitbucket::new(config).unwrap(), seen)

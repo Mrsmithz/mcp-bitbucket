@@ -7,11 +7,18 @@ use std::{env, net::IpAddr, time::Duration};
 use url::Url;
 
 mod file_review;
+mod repositories;
 
 const MAX_BODY: usize = 1_000_000;
 const MAX_DIFF: usize = 500_000;
 const MAX_REDIRECTS: usize = 3;
 const MAX_PAGE: usize = 50;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TlsVerification {
+    Verify,
+    Insecure,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RequestKind {
     Read,
@@ -27,6 +34,7 @@ pub struct Config {
     workspace: Workspace,
     auth: String,
     secret: String,
+    tls: TlsVerification,
 }
 impl Config {
     pub fn from_env() -> Result<Self, String> {
@@ -36,15 +44,30 @@ impl Config {
             .map_err(|_| "BITBUCKET_API_TOKEN is required".to_string())?;
         let workspace = env::var("BITBUCKET_WORKSPACE")
             .map_err(|_| "BITBUCKET_WORKSPACE is required".to_string())?;
+        let tls = match env::var_os("BITBUCKET_TLS_VERIFY") {
+            None => TlsVerification::Verify,
+            Some(value) => match value.into_string().ok().as_deref() {
+                Some("true") => TlsVerification::Verify,
+                Some("false") => TlsVerification::Insecure,
+                _ => return Err("BITBUCKET_TLS_VERIFY must be exactly true or false".into()),
+            },
+        };
         Self::new(
             &email,
             &token,
             &workspace,
             &env::var("BITBUCKET_BASE_URL")
                 .unwrap_or_else(|_| "https://api.bitbucket.org/2.0".into()),
+            tls,
         )
     }
-    pub fn new(email: &str, token: &str, workspace: &str, base: &str) -> Result<Self, String> {
+    pub fn new(
+        email: &str,
+        token: &str,
+        workspace: &str,
+        base: &str,
+        tls: TlsVerification,
+    ) -> Result<Self, String> {
         if email.is_empty()
             || token.is_empty()
             || email.contains(':')
@@ -82,6 +105,7 @@ impl Config {
             workspace,
             auth: format!("Basic {}", STANDARD.encode(format!("{email}:{token}"))),
             secret: token.to_owned(),
+            tls,
         })
     }
 }
@@ -90,17 +114,28 @@ impl Config {
 pub struct Bitbucket {
     config: Config,
     http: reqwest::Client,
+    cursors: repositories::CursorRegistry,
 }
 impl Bitbucket {
     pub fn new(config: Config) -> Result<Self, String> {
+        if config.tls == TlsVerification::Insecure {
+            eprintln!(
+                "WARNING: BITBUCKET_TLS_VERIFY=false disables TLS certificate verification for all Bitbucket API requests."
+            );
+        }
         let http = reqwest::Client::builder()
+            .danger_accept_invalid_certs(config.tls == TlsVerification::Insecure)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|_| "HTTP client initialization failed".to_string())?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            http,
+            cursors: repositories::CursorRegistry::new(),
+        })
     }
     pub fn sanitize<T: serde::Serialize>(&self, value: T) -> Value {
         let mut value = serde_json::to_value(value).unwrap_or(Value::Null);
@@ -762,10 +797,10 @@ mod tests {
     #[test]
     fn workspace_is_required_and_rejects_unsafe_segments_without_echoing_values() {
         let base = "https://api.bitbucket.org/2.0";
-        assert!(Config::new("a@b.test", "token", "acme", base).is_ok());
+        assert!(Config::new("a@b.test", "token", "acme", base, TlsVerification::Verify).is_ok());
         for workspace in ["", "   ", "../unsafe", "."] {
             assert!(matches!(
-                Config::new("a@b.test", "token", workspace, base),
+                Config::new("a@b.test", "token", workspace, base, TlsVerification::Verify),
                 Err(error) if error == "BITBUCKET_WORKSPACE is invalid"
             ));
         }
