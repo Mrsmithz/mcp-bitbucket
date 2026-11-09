@@ -40,6 +40,13 @@ async fn endpoint(
         .lock()
         .unwrap()
         .push((method.to_string(), recorded_path, value.clone(), auth));
+    if method == Method::GET && path == "/proxy/2.0/repositories/acme" {
+        return Json(json!({"values":[{
+            "uuid":"{repo-id}","name":"Demo","full_name":"acme/demo","is_private":false,
+            "links":{"html":{"href":"https://bitbucket.org/acme/demo"}}
+        }]}))
+        .into_response();
+    }
     if method == Method::GET && path.ends_with("/pullrequests") {
         return Json(json!({"values":[]})).into_response();
     }
@@ -129,6 +136,7 @@ impl Harness {
             .env("BITBUCKET_API_TOKEN", "secret-token")
             .env("BITBUCKET_WORKSPACE", "acme")
             .env("BITBUCKET_BASE_URL", base)
+            .env("BITBUCKET_TLS_VERIFY", "true")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -174,6 +182,7 @@ async fn launch_without_workspace(base: &str, workspace: Option<&str>) -> std::p
         .env("BITBUCKET_EMAIL", "test@example.com")
         .env("BITBUCKET_API_TOKEN", "secret-token")
         .env("BITBUCKET_BASE_URL", base)
+        .env("BITBUCKET_TLS_VERIFY", "true")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(workspace) = workspace {
@@ -224,6 +233,7 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
         .unwrap()
         .clone();
     let names = [
+        "search_repositories",
         "list_pull_requests",
         "get_pull_request",
         "get_pull_request_diff",
@@ -243,8 +253,19 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
             tool["inputSchema"]["properties"].get("workspace").is_none(),
             "{name} exposes workspace"
         );
+        if name == "search_repositories" {
+            let mut properties: Vec<_> = tool["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            properties.sort_unstable();
+            assert_eq!(properties, ["page", "pagelen", "query"]);
+        }
     }
     let arguments = [
+        ("search_repositories", json!({"query":"repo"})),
         ("list_pull_requests", json!({"repo_slug":"repo"})),
         (
             "get_pull_request",
@@ -332,6 +353,7 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
         assert_eq!(
             trace,
             [
+                ("GET", "/proxy/2.0/repositories/acme?pagelen=50"),
                 (
                     "GET",
                     "/proxy/2.0/repositories/acme/repo/pullrequests?pagelen=50"
@@ -376,16 +398,17 @@ async fn every_schema_and_route_uses_only_the_configured_workspace() {
                 ),
                 ("GET", "/proxy/2.0/repositories/acme/repo/pullrequests/1?"),
             ],
-            "HTTP request trace for eleven successful tool calls"
+            "HTTP request trace for twelve successful tool calls"
         );
         assert!(records.iter().all(|(_, _, _, auth)| {
             auth.as_deref()
                 .is_some_and(|value| value.starts_with("Basic "))
         }));
         assert!(
-            records
-                .iter()
-                .all(|(_, path, _, _)| path.starts_with("/proxy/2.0/repositories/acme/repo/")),
+            records.iter().all(|(_, path, _, _)| {
+                path.starts_with("/proxy/2.0/repositories/acme/")
+                    || path.starts_with("/proxy/2.0/repositories/acme?")
+            }),
             "a request did not use the configured workspace: {records:?}"
         );
     }
@@ -416,6 +439,7 @@ async fn spawned_stdio_handshake_and_calls_are_id_correlated_and_semantically_ch
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     for name in [
+        "search_repositories",
         "list_pull_requests",
         "get_pull_request",
         "get_pull_request_diff",

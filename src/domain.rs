@@ -54,6 +54,22 @@ pub struct PullRequestTarget {
 }
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SearchRepositoriesInput {
+    pub query: Option<String>,
+    pub page: Option<String>,
+    pub pagelen: Option<u8>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Repository {
+    pub uuid: String,
+    pub name: String,
+    pub slug: String,
+    pub workspace: String,
+    pub url: String,
+    pub is_private: bool,
+}
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListPullRequestsInput {
     pub repo_slug: String,
     pub state: Option<String>,

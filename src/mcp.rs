@@ -33,6 +33,15 @@ fn output<T: Serialize>(api: &Bitbucket, r: Result<T, ToolError>) -> CallToolRes
 #[tool_router]
 impl BitbucketServer {
     #[tool(
+        description = "Search repositories in the configured workspace by a literal, case-insensitive name or slug substring. Returns one bounded upstream page; an empty values array may still have a next_page token."
+    )]
+    async fn search_repositories(
+        &self,
+        Parameters(input): Parameters<SearchRepositoriesInput>,
+    ) -> CallToolResult {
+        output(&self.api, self.api.search_repositories(input).await)
+    }
+    #[tool(
         description = "List pull requests in a repository. Returns bounded values and an actionable next_page token."
     )]
     async fn list_pull_requests(

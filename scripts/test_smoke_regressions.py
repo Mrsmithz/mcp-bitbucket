@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -167,6 +168,89 @@ class StdioRegressionTests(unittest.TestCase):
             self.assertTrue(all(sum(map(len, chunks)) <= client.CAPTURE_LIMIT
                                 for chunks in client._captures.values()))
 
+    def test_client_env_overrides_replace_and_unset_fixture_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "environment"
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'email_set': bool(os.environ.get('BITBUCKET_EMAIL')), "
+                "'token_set': bool(os.environ.get('BITBUCKET_API_TOKEN')), "
+                "'tls_set': 'BITBUCKET_TLS_VERIFY' in os.environ}))\n"
+            )
+            executable.chmod(0o700)
+            client = stdio.StdioClient(executable, "http://127.0.0.1/unused", env_overrides={
+                "BITBUCKET_EMAIL": "fixture@example.invalid",
+                "BITBUCKET_API_TOKEN": "fixture-only-token",
+                "BITBUCKET_TLS_VERIFY": None,
+            })
+            client.close()
+            self.assertEqual(json.loads(client._captured()["stdout"]), {
+                "email_set": True, "token_set": True, "tls_set": False,
+            })
+            self.assertIn("fixture-only-token", client.secrets)
+
+    def test_broken_pipe_while_closing_stdin_still_kills_process_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "waiting"
+            ready = Path(directory) / "ready"
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import time\nfrom pathlib import Path\n"
+                f"Path({str(ready)!r}).write_text('ready')\n"
+                "time.sleep(30)\n"
+            )
+            executable.chmod(0o700)
+            client = stdio.StdioClient(executable, "http://127.0.0.1/unused")
+            try:
+                deadline = time.monotonic() + 3
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists(), "fixture did not become ready")
+                self.assertIsNone(client.process.poll(), "fixture exited before failure injection")
+                with patch.object(client.process.stdin, "close", side_effect=BrokenPipeError("controlled close")):
+                    with self.assertRaisesRegex(BrokenPipeError, "controlled close"):
+                        client.close()
+                self.assertIsNotNone(client.process.poll())
+                self.assertTrue(all(not reader.is_alive() for reader in client._readers))
+            finally:
+                if client.process.poll() is None:
+                    client.process.kill()
+                client.process.wait(timeout=3)
+                client.process.stdin.close()
+                for reader in client._readers:
+                    reader.join(timeout=3)
+
+    def test_exited_parent_descendant_holding_pipes_is_killed_and_readers_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "term-seen"
+            ready = Path(directory) / "ready"
+            child = Path(directory) / "child.py"
+            executable = Path(directory) / "parent"
+            child.write_text(
+                "import signal, time\n"
+                f"from pathlib import Path\nmarker = Path({str(marker)!r})\nready = Path({str(ready)!r})\n"
+                "def stopped(*_):\n    marker.write_text('term')\n    raise SystemExit(0)\n"
+                "signal.signal(signal.SIGTERM, stopped)\nready.write_text('ready')\n"
+                "time.sleep(30)\n"
+            )
+            executable.write_text(
+                "#!/usr/bin/env python3\n"
+                "import subprocess, sys\n"
+                "import time\n"
+                f"subprocess.Popen([sys.executable, {str(child)!r}])\n"
+                f"deadline = time.monotonic() + 3\nwhile not __import__('pathlib').Path({str(ready)!r}).exists() and time.monotonic() < deadline: time.sleep(0.01)\n"
+            )
+            executable.chmod(0o700)
+            client = stdio.StdioClient(executable, "http://127.0.0.1/unused")
+            client.process.wait(timeout=3)
+            self.assertIsNotNone(client.process.poll(), "test parent did not exit before cleanup")
+            client.close()
+            self.assertTrue(marker.exists(), "process-group TERM did not reach pipe-holding descendant")
+            self.assertTrue(all(not reader.is_alive() for reader in client._readers))
+            self.assertLessEqual(sum(client._sizes.values()), 2 * client.CAPTURE_LIMIT)
+
     def test_finite_stdout_and_stderr_are_captured_within_bounds(self):
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "finite"
@@ -196,6 +280,7 @@ class StdioRegressionTests(unittest.TestCase):
                 "'email_set': bool(os.environ.get('BITBUCKET_EMAIL')), "
                 "'token_set': bool(os.environ.get('BITBUCKET_API_TOKEN')), "
                 "'workspace': os.environ.get('BITBUCKET_WORKSPACE'), "
+                "'tls_verify': os.environ.get('BITBUCKET_TLS_VERIFY'), "
                 "'no_proxy': os.environ.get('NO_PROXY')}))\n"
             )
             executable.chmod(0o700)
@@ -207,6 +292,7 @@ class StdioRegressionTests(unittest.TestCase):
             self.assertTrue(environment["email_set"])
             self.assertTrue(environment["token_set"])
             self.assertEqual(environment["workspace"], "acme")
+            self.assertEqual(environment["tls_verify"], "true")
             self.assertEqual(environment["no_proxy"], "127.0.0.1,localhost")
 
     def assert_no_leak(self, output):
